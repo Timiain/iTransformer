@@ -63,14 +63,14 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
     parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
     parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
-    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'tse'],
+    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sam', 'asam', 'tse'],
                         help='optimizer type')
-    parser.add_argument('--tse_rho_min', type=float, default=1e-4, help='minimum adaptive perturbation radius for TSE')
-    parser.add_argument('--tse_rho_max', type=float, default=0.5, help='maximum adaptive perturbation radius for TSE')
-    parser.add_argument('--tse_distance_lambda', type=float, default=1e-4,
-                        help='distance regularization coefficient for TSE')
-    parser.add_argument('--tse_shadow_momentum', type=float, default=0.05,
-                        help='shadow endpoint update momentum for TSE')
+    parser.add_argument('--sam_rho', type=float, default=0.05, help='SAM perturbation radius')
+    parser.add_argument('--tse_importance', type=float, default=10.0, help='EWC importance coefficient for TSE')
+    parser.add_argument('--tse_alpha', type=float, default=0.5, help='balance weight between parent A and B regularization')
+    parser.add_argument('--tse_parent_a', type=str, default='', help='checkpoint path for TSE parent A')
+    parser.add_argument('--tse_parent_b', type=str, default='', help='checkpoint path for TSE parent B')
+    parser.add_argument('--tse_fisher_batches', type=int, default=20, help='number of train batches used to estimate Fisher info')
     parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
