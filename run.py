@@ -2,6 +2,7 @@ import argparse
 import torch
 from experiments.exp_long_term_forecasting import Exp_Long_Term_Forecast
 from experiments.exp_long_term_forecasting_partial import Exp_Long_Term_Forecast_Partial
+from experiments.exp_long_term_forecasting_ddhace import Exp_Long_Term_Forecast_DDHACE
 import random
 import numpy as np
 
@@ -17,7 +18,7 @@ if __name__ == '__main__':
     parser.add_argument('--is_training', type=int, required=True, default=1, help='status')
     parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
     parser.add_argument('--model', type=str, required=True, default='iTransformer',
-                        help='model name, options: [iTransformer, iInformer, iReformer, iFlowformer, iFlashformer]')
+                        help='model name, options: [iTransformer, iInformer, iReformer, iFlowformer, iFlashformer, DDHACE]')
 
     # data loader
     parser.add_argument('--data', type=str, required=True, default='custom', help='dataset type')
@@ -76,7 +77,7 @@ if __name__ == '__main__':
 
     # iTransformer
     parser.add_argument('--exp_name', type=str, required=False, default='MTSF',
-                        help='experiemnt name, options:[MTSF, partial_train]')
+                        help='experiemnt name, options:[MTSF, partial_train, ddhace_train]')
     parser.add_argument('--channel_independence', type=bool, default=False, help='whether to use channel_independence mechanism')
     parser.add_argument('--inverse', action='store_true', help='inverse output data', default=False)
     parser.add_argument('--class_strategy', type=str, default='projection', help='projection/average/cls_token')
@@ -86,6 +87,21 @@ if __name__ == '__main__':
     parser.add_argument('--use_norm', type=int, default=True, help='use norm and denorm')
     parser.add_argument('--partial_start_index', type=int, default=0, help='the start index of variates for partial training, '
                                                                            'you can select [partial_start_index, min(enc_in + partial_start_index, N)]')
+
+
+    # DD-HACE
+    parser.add_argument('--ddhace_temperature', type=float, default=0.07, help='contrastive temperature for DD-HACE')
+    parser.add_argument('--ddhace_time_alpha', type=float, default=0.01, help='time consistency weight coefficient')
+    parser.add_argument('--ddhace_periodic_k', type=int, default=4, help='number of learnable periodic basis functions')
+    parser.add_argument('--ddhace_diff_steps', type=int, default=4, help='diffusion steps for synthetic negatives')
+    parser.add_argument('--ddhace_memory_size', type=int, default=2048, help='memory queue capacity')
+    parser.add_argument('--ddhace_mem_clusters', type=int, default=128, help='k-means centers when memory compression triggers')
+    parser.add_argument('--ddhace_mem_update_steps', type=int, default=5, help='compression interval in training steps')
+    parser.add_argument('--ddhace_lambda_c', type=float, default=1.0, help='weight for contrastive loss')
+    parser.add_argument('--ddhace_lambda_f', type=float, default=1.0, help='weight for forecasting MSE loss')
+    parser.add_argument('--ddhace_lambda_l2', type=float, default=1e-7, help='weight for L2 regularization')
+    parser.add_argument('--ddhace_lambda_mc', type=float, default=0.1, help='weight for memory compression loss')
+    parser.add_argument('--ddhace_lambda_cstr', type=float, default=0.1, help='weight for contrastive regularization')
 
     args = parser.parse_args()
     args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
@@ -101,6 +117,8 @@ if __name__ == '__main__':
 
     if args.exp_name == 'partial_train': # See Figure 8 of our paper, for the detail
         Exp = Exp_Long_Term_Forecast_Partial
+    elif args.exp_name == 'ddhace_train':
+        Exp = Exp_Long_Term_Forecast_DDHACE
     else: # MTSF: multivariate time series forecasting
         Exp = Exp_Long_Term_Forecast
 
