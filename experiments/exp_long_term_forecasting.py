@@ -5,6 +5,7 @@ from utils.metrics import metric
 import torch
 import torch.nn as nn
 from torch import optim
+from utils.sam_optimizer import SAM
 import os
 import time
 import warnings
@@ -29,8 +30,79 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return data_set, data_loader
 
     def _select_optimizer(self):
+        if self.args.optimizer in ['sam', 'asam', 'tse']:
+            return SAM(
+                self.model.parameters(),
+                torch.optim.Adam,
+                rho=self.args.sam_rho,
+                adaptive=self.args.optimizer in ['asam', 'tse'],
+                lr=self.args.learning_rate,
+            )
         model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
         return model_optim
+
+    def _load_state_dict_flexible(self, checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            return checkpoint['state_dict']
+        if isinstance(checkpoint, dict) and 'model' in checkpoint:
+            return checkpoint['model']
+        return checkpoint
+
+    def _compute_fisher_information(self, model, train_loader, criterion, max_batches):
+        fisher = {name: torch.zeros_like(param, device=self.device) for name, param in model.named_parameters()}
+        model.train()
+        total_batches = 0
+        for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
+            if i >= max_batches:
+                break
+            model.zero_grad()
+            batch_x = batch_x.float().to(self.device)
+            batch_y = batch_y.float().to(self.device)
+            if 'PEMS' in self.args.data or 'Solar' in self.args.data:
+                batch_x_mark = None
+                batch_y_mark = None
+            else:
+                batch_x_mark = batch_x_mark.float().to(self.device)
+                batch_y_mark = batch_y_mark.float().to(self.device)
+            dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
+            dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+            outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+            if self.args.output_attention:
+                outputs = outputs[0]
+            f_dim = -1 if self.args.features == 'MS' else 0
+            outputs = outputs[:, -self.args.pred_len:, f_dim:]
+            target = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+            loss = criterion(outputs, target)
+            loss.backward()
+            total_batches += 1
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    fisher[name] += (param.grad.detach() ** 2)
+        if total_batches > 0:
+            for name in fisher:
+                fisher[name] = fisher[name] / float(total_batches)
+        return fisher
+
+    def _prepare_tse_regularization(self, train_loader, criterion):
+        if not self.args.tse_parent_a or not self.args.tse_parent_b:
+            raise ValueError('TSE requires --tse_parent_a and --tse_parent_b checkpoints.')
+        model_a = self.model_dict[self.args.model].Model(self.args).float().to(self.device)
+        model_b = self.model_dict[self.args.model].Model(self.args).float().to(self.device)
+        model_a.load_state_dict(self._load_state_dict_flexible(self.args.tse_parent_a), strict=False)
+        model_b.load_state_dict(self._load_state_dict_flexible(self.args.tse_parent_b), strict=False)
+        params_a = {name: param.detach().clone() for name, param in model_a.named_parameters()}
+        params_b = {name: param.detach().clone() for name, param in model_b.named_parameters()}
+        fisher_a = self._compute_fisher_information(model_a, train_loader, criterion, self.args.tse_fisher_batches)
+        fisher_b = self._compute_fisher_information(model_b, train_loader, criterion, self.args.tse_fisher_batches)
+        return params_a, params_b, fisher_a, fisher_b
+
+    def _ewc_loss(self, params_ref, fisher_ref, importance):
+        reg = 0.0
+        for name, param in self.model.named_parameters():
+            if name in fisher_ref:
+                reg = reg + torch.sum(fisher_ref[name] * (param - params_ref[name]) ** 2)
+        return importance * reg
 
     def _select_criterion(self):
         criterion = nn.MSELoss()
@@ -96,7 +168,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         model_optim = self._select_optimizer()
         criterion = self._select_criterion()
 
-        if self.args.use_amp:
+        tse_state = None
+        if self.args.optimizer == 'tse':
+            tse_state = self._prepare_tse_regularization(train_loader, criterion)
+
+        train_use_amp = self.args.use_amp and self.args.optimizer == 'adam'
+        if train_use_amp:
             scaler = torch.cuda.amp.GradScaler()
 
         for epoch in range(self.args.train_epochs):
@@ -122,7 +199,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
                 # encoder - decoder
-                if self.args.use_amp:
+                if train_use_amp:
                     with torch.cuda.amp.autocast():
                         if self.args.output_attention:
                             outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
@@ -154,7 +231,35 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     iter_count = 0
                     time_now = time.time()
 
-                if self.args.use_amp:
+                if self.args.optimizer == 'tse':
+                    params_a, params_b, fisher_a, fisher_b = tse_state
+                    loss_ewc_a = self._ewc_loss(params_a, fisher_a, self.args.tse_importance)
+                    loss_ewc_b = self._ewc_loss(params_b, fisher_b, self.args.tse_importance)
+                    total_loss = loss + self.args.tse_alpha * loss_ewc_a + (1.0 - self.args.tse_alpha) * loss_ewc_b
+                    total_loss.backward()
+                    model_optim.first_step(zero_grad=True)
+
+                    if self.args.output_attention:
+                        second_outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                    else:
+                        second_outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    second_outputs = second_outputs[:, -self.args.pred_len:, f_dim:]
+                    second_loss = criterion(second_outputs, batch_y)
+                    second_loss.backward()
+                    model_optim.second_step(zero_grad=True)
+                elif self.args.optimizer in ['sam', 'asam']:
+                    loss.backward()
+                    model_optim.first_step(zero_grad=True)
+
+                    if self.args.output_attention:
+                        second_outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                    else:
+                        second_outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    second_outputs = second_outputs[:, -self.args.pred_len:, f_dim:]
+                    second_loss = criterion(second_outputs, batch_y)
+                    second_loss.backward()
+                    model_optim.second_step(zero_grad=True)
+                elif train_use_amp:
                     scaler.scale(loss).backward()
                     scaler.step(model_optim)
                     scaler.update()
