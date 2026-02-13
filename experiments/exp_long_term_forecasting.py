@@ -5,6 +5,7 @@ from utils.metrics import metric
 import torch
 import torch.nn as nn
 from torch import optim
+from utils.tse_optimizer import TSEOptimizer
 import os
 import time
 import warnings
@@ -29,6 +30,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return data_set, data_loader
 
     def _select_optimizer(self):
+        if self.args.optimizer == 'tse':
+            base_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
+            return TSEOptimizer(
+                self.model.parameters(),
+                base_optimizer=base_optim,
+                rho_min=self.args.tse_rho_min,
+                rho_max=self.args.tse_rho_max,
+                distance_lambda=self.args.tse_distance_lambda,
+                shadow_momentum=self.args.tse_shadow_momentum,
+            )
         model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
         return model_optim
 
@@ -154,7 +165,22 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     iter_count = 0
                     time_now = time.time()
 
-                if self.args.use_amp:
+                if self.args.optimizer == 'tse':
+                    loss_with_reg = loss + model_optim.distance_regularization()
+                    loss_with_reg.backward()
+                    model_optim.first_step(zero_grad=True)
+
+                    if self.args.output_attention:
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                    else:
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    f_dim = -1 if self.args.features == 'MS' else 0
+                    outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                    batch_y_second = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                    second_loss = criterion(outputs, batch_y_second) + model_optim.distance_regularization()
+                    second_loss.backward()
+                    model_optim.second_step(zero_grad=True)
+                elif self.args.use_amp:
                     scaler.scale(loss).backward()
                     scaler.step(model_optim)
                     scaler.update()
