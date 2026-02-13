@@ -17,7 +17,7 @@ if __name__ == '__main__':
     parser.add_argument('--is_training', type=int, required=True, default=1, help='status')
     parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
     parser.add_argument('--model', type=str, required=True, default='iTransformer',
-                        help='model name, options: [iTransformer, iInformer, iReformer, iFlowformer, iFlashformer]')
+                        help='model name, options: [iTransformer, iInformer, iReformer, iFlowformer, iFlashformer, PhysicsAwareControlSSM]')
 
     # data loader
     parser.add_argument('--data', type=str, required=True, default='custom', help='dataset type')
@@ -86,6 +86,16 @@ if __name__ == '__main__':
     parser.add_argument('--use_norm', type=int, default=True, help='use norm and denorm')
     parser.add_argument('--partial_start_index', type=int, default=0, help='the start index of variates for partial training, '
                                                                            'you can select [partial_start_index, min(enc_in + partial_start_index, N)]')
+
+    # PhysicsAwareControlSSM
+    parser.add_argument('--lambda_phys', type=float, default=0.05, help='weight for physical consistency losses')
+    parser.add_argument('--lambda_lyap', type=float, default=0.1, help='weight for Lyapunov stability loss')
+    parser.add_argument('--lambda_rho', type=float, default=0.1, help='weight for spectral radius penalty')
+    parser.add_argument('--lyap_epsilon', type=float, default=1e-3, help='Lyapunov contraction margin')
+    parser.add_argument('--energy_alpha', type=float, default=0.1, help='rainfall-energy conversion coefficient')
+    parser.add_argument('--rain_idx', type=int, default=0, help='feature index used as rainfall signal')
+    parser.add_argument('--flow_idx', type=int, default=1, help='feature index used as upstream flow signal')
+    parser.add_argument('--wind_idx', type=int, default=2, help='feature index used as wind signal')
 
     args = parser.parse_args()
     args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False

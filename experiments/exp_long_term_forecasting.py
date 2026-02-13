@@ -36,6 +36,15 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         criterion = nn.MSELoss()
         return criterion
 
+    def _model_without_parallel(self):
+        return self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+
+    def _compute_aux_loss(self):
+        model = self._model_without_parallel()
+        if hasattr(model, 'compute_aux_loss'):
+            return model.compute_aux_loss()
+        return torch.tensor(0.0, device=self.device), {}
+
     def vali(self, vali_data, vali_loader, criterion):
         total_loss = []
         self.model.eval()
@@ -133,6 +142,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                         loss = criterion(outputs, batch_y)
+                        aux_loss, _ = self._compute_aux_loss()
+                        loss = loss + aux_loss
                         train_loss.append(loss.item())
                 else:
                     if self.args.output_attention:
@@ -144,6 +155,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                     loss = criterion(outputs, batch_y)
+                    aux_loss, _ = self._compute_aux_loss()
+                    loss = loss + aux_loss
                     train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
