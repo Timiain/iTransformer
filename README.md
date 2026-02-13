@@ -83,6 +83,28 @@ bash ./scripts/increasing_lookback/Traffic/iTransformer.sh
 bash ./scripts/efficient_attentions/iFlashTransformer.sh
 ```
 
+
+## Joint Training on All Datasets (96 -> 96)
+
+If you want to train **one shared iTransformer** across all benchmark datasets (instead of one model per dataset), use:
+
+```bash
+python joint_train_all_datasets.py \
+  --seq_len 96 \
+  --pred_len 96 \
+  --label_len 48 \
+  --model_id joint_all_datasets_96_96
+```
+
+The script will:
+- jointly train one iTransformer on all predefined datasets in `DEFAULT_DATASETS`;
+- apply early stopping using the **average validation loss across datasets**;
+- evaluate once on all test sets after convergence;
+- export a CSV table to `./results/joint_all_datasets/joint_metrics.csv`;
+- export a radar chart to `./results/joint_all_datasets/joint_radar.png` (MSE/MAE by dataset).
+
+If your dataset paths are different, edit `DEFAULT_DATASETS` in `joint_train_all_datasets.py`.
+
 ## Main Result of Multivariate Forecasting
 
 We evaluate the iTransformer on challenging multivariate forecasting benchmarks (**generally hundreds of variates**). **Comprehensive good performance** (MSE/MAE $\downarrow$) is achieved.
